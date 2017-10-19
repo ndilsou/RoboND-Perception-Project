@@ -777,7 +777,7 @@
       <link name='book_link'>
         <inertial>
           <pose frame=''>0 0 0 0 -0 0</pose>
-          <mass>0.08</mass>
+          <mass>0.2</mass>
           <inertia>
             <ixx>1</ixx>
             <ixy>0</ixy>
@@ -832,7 +832,7 @@
       <link name='glue_link'>
         <inertial>
           <pose frame=''>0 0 0 0 -0 0</pose>
-          <mass>0.08</mass>
+          <mass>0.2</mass>
           <inertia>
             <ixx>1</ixx>
             <ixy>0</ixy>
@@ -887,7 +887,7 @@
       <link name='soap_link'>
         <inertial>
           <pose frame=''>0 0 0 0 -0 0</pose>
-          <mass>0.08</mass>
+          <mass>0.2</mass>
           <inertia>
             <ixx>1</ixx>
             <ixy>0</ixy>
@@ -942,7 +942,7 @@
       <link name='soap2_link'>
         <inertial>
           <pose frame=''>0 0 0 0 -0 0</pose>
-          <mass>0.08</mass>
+          <mass>0.20</mass>
           <inertia>
             <ixx>1</ixx>
             <ixy>0</ixy>
@@ -997,7 +997,7 @@
       <link name='sticky_notes_link'>
         <inertial>
           <pose frame=''>0 0 0 0 -0 0</pose>
-          <mass>0.08</mass>
+          <mass>0.20</mass>
           <inertia>
             <ixx>1</ixx>
             <ixy>0</ixy>
@@ -1107,7 +1107,7 @@
       <link name='snacks_link'>
         <inertial>
           <pose frame=''>0 0 0 0 -0 0</pose>
-          <mass>0.08</mass>
+          <mass>0.28</mass>
           <inertia>
             <ixx>1</ixx>
             <ixy>0</ixy>
