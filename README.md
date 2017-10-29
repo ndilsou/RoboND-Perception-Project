@@ -10,16 +10,23 @@ This implementation of the Perception project was ran on a Ubuntu 16.04 device w
 
 
 The objective of this project was to implement a perception pipeline from reading a point cloud to performing segmentation.
-![](./media/full_bin.jpg ) 
 
 #### Structure of the project:
 
-Modification were made to the files provided by Udacity and additional files were added to make the structure of the project more consistent.
 All the files and their content is described below:
 
-- [*kuka_arm/scripts/IK_server.py*](./kuka_arm/scripts/IK_server.py) [new]: Contains the ROS node used to provide the IKCalculation service.
+- [*pr2_robot/scripts/perception_pipeline.py*](./pr2_robot/scripts/perception_pipeline.py): Contains the ROS node used to perform the perception.
 
-- [*kuka_arm/scripts/kr210_kinematics/\__main\__.py*](./kuka_arm/scripts/kr210_kinematics/__main__.py) [from udacity]: Contains the IK_debug.py code modified to work with the rest of the package. Allows to call the package more easily from the command line via 'python -m kr210_kinematics'
+- [*pr2_robot/scripts/features.py*](./pr2_robot/scripts/features.py): Contains the code to extract features histogram from an input point cloud.
+
+- [*pr2_robot/scripts/train_svm.py*](./pr2_robot/scripts/train_svm.py): Contains the code to train the model.
+
+- [*pr2_robot/scripts/capture_features.py*](./pr2_robot/scripts/capture_features.py): Contains the code to capture and serialize the training data for the model. The size of the dataset can be controlled by passing an integer to the script. This integer represent the number of sample to collect for each label.
+- [*pr2_robot/scripts/output/*](./pr2_robot/scripts/output/): This folder contains the output yaml files for test1, test2 and test3.
+- [*pr2_robot/scripts/estimators/*](./pr2_robot/scripts/estimators/): This folder the serialized trained prediction model that are supported by the perception_pipeline.
+
+- [*notebooks/*](./notebooks/): Contains the ipython notebook used to experiment with various models as well as the training data.
+
 
 ##### Usage :
 
@@ -31,16 +38,14 @@ rosrun pr2_robot perception_pipeline <world_index> <estimator>  [--pickup]
 
 with `<world_index>` and integer in 1-4 representing which world is currently in use, `<estimator>` the predicition model, and `--pickup` an optional indicating if the node should write to yaml (default) or send the pickup requests to the robot.
 
-available models are: {kernel_logit, kernel_lda, svm_chi2, svm_sigmoid}
+available models are: __kernel_logit, kernel_lda, svm_chi2, svm_sigmoid__
 
 #### Pipeline Implementation:
 
-##### Filtering and RANSAC
-
-##### Clustering for segmentation
+##### Filtering, RANSAC and clustering
+Please go the [perception_pipeline](./pr2_robot/scripts/perception_pipeline.py) to see the code relevant to this step in the method pcl_callback. 
 
 ##### Feature extraction and object recognition
-
 
 To facilitate experimentation, we moved the code in train_svm.py to a notebook. train_svm is still provided but we recommend the reader to look at the notebook instead. 
 We tested various models from Logistic Regression to different Kernels for SVM and Linear Discriminant Analysis. The confusion matrices and our comments are provided below.
@@ -142,13 +147,21 @@ Accuracy: 0.99 (+/- 0.02)
 accuracy score: 0.99
 ```
 ![](./media/confusion_matrices/svm_sigmoid.jpg?raw=true)
-Very good performance overall, but it seems to be the most complex model of the lot.
+Very good performance overall, but it seems to be the most complex model of the collection. Nonetheless as it was the required model for this project, it was used during the pick and place.
 
 
 Overall we can see that while SVM is a very good choice, one should experiment with various models to fine the best one for the job. Notably, the engineer should always look for the simplest model as this reduces the sources of errors in production.
 
 #### Pick And Place
 
+##### World 1
+![](./media/world1.png?raw=true)
 
+##### World 2
+![](./media/world2.png?raw=true)
 
+##### World 3
+![](./media/world3.png?raw=true)
 
+#####  Further improvements:
+The perception_pipeline contains code to perform the pick and place operations but the logic to implement the sideways lookup and populate the collision map with the boxes is not complete. In addition several issues were encountered regarding the robots ability to grip the objects properly. For those reason while the pickup option is available, it may not word all the times.

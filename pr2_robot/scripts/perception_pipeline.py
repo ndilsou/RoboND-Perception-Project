@@ -181,8 +181,8 @@ def pcl_callback(pcl_msg):
         pcl_cluster = extracted_outliers.extract(pts_list)
         # Tconvert the cluster from pcl to ROS using helper function
         ros_cluster = pcl_to_ros(pcl_cluster)
+
         # Extract histogram features
-        # complete this step just as is covered in capture_features.py
         feature = extract_features(ros_cluster, get_normals)
 
         # Make the prediction, retrieve the label for the result
@@ -209,12 +209,8 @@ def pcl_callback(pcl_msg):
     rospy.loginfo('Detected {} objects: {}'.format(len(detected_objects_labels), detected_objects_labels))
 
     # Publish the list of detected objects
-    # This is the output you'll need to complete the upcoming project!
     detected_objects_pub.publish(detected_objects)
 
-    # Suggested location for where to invoke your pr2_mover() function within pcl_callback()
-    # Could add some logic to determine whether or not your object detections are robust
-    # before calling pr2_mover()
     if len(separate_objects_cloud) > 1:
         if pickup:  # perform pick and place.
             try:
@@ -233,7 +229,7 @@ def get_cloud_centroid(cloud):
 
 
 def aggregate_clouds(clouds):
-    """ Forms a single point cloud object from an iteratible of clouds.
+    """ Forms a single point cloud object from an iterable of clouds.
     """
     cloud = pcl.PointCloud_PointXYZRGB()
     objects = tuple(c.to_array() for c in clouds)
@@ -246,7 +242,7 @@ def get_output(table_object, object_dict, dropbox_map):
     """
     Collects all the information required to send a pick and place request for a single object.
 
-    This function will fill obtain the object label, arm to use, and poses for the object and target box. 
+    This function will obtain the object label, arm to use, and poses for the object and target box.
     """
     object_name = String()
     object_name.data = table_object["name"]
@@ -303,10 +299,16 @@ def clear_octomap():
 
 
 def scan():
-    """Rotates PR2 in place to capture side tables for the collision map"""
+    """Rotates PR2 in place to capture side tables for the collision map
+    The initial plan was to send the rotation command and wait for the robot to reach the
+    position by polling the /pr2/joint_states topic and looking up the value for the base joint
+    until the target is reached.
+    """
     base_joint_controller_pub.publish(Float64(-np.pi / 2))
-    rospy.wait_for_message("/pr2/joint_states")
+    #rospy.wait_for_message("/pr2/joint_states")
     base_joint_controller_pub.publish(Float64(np.pi / 2))
+
+    # return to normal position.
     base_joint_controller_pub.publish(Float64(0))
 
 
@@ -359,7 +361,7 @@ class Pr2Mover:
                                                                       object_dict,
                                                                       self.dropbox_map)
             # send pickup request.
-            # pickup(object_name, arm_name, pick_pose, place_pose)
+            pickup(object_name, arm_name, pick_pose, place_pose)
         else:
             print("no remaining object to pickup")
 
