@@ -3,6 +3,7 @@
 # Import modules
 import os
 import sys
+import argparse
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
 import pickle
@@ -29,7 +30,7 @@ import yaml
 
 
 # Constants
-LEAF_SIZE = 0.01
+LEAF_SIZE = 0.005
 Z_AXIS_MIN = 0.605
 Z_AXIS_MAX = 1.2
 Y_AXIS_MIN = -0.4
@@ -43,7 +44,6 @@ TOLERANCE = 0.05
 MIN_SIZE = 50
 MAX_SIZE = 1500
 
-
 # Helper function to get surface normals
 def get_normals(cloud):
     get_normals_prox = rospy.ServiceProxy('/feature_extractor/get_normals', GetNormals)
@@ -51,9 +51,9 @@ def get_normals(cloud):
 
 
 # Helper function to create a yaml friendly dictionary from ROS messages
-def make_yaml_dict(test_scene_num, arm_name, object_name, pick_pose, place_pose):
+def make_yaml_dict(current_scene_num, arm_name, object_name, pick_pose, place_pose):
     yaml_dict = {}
-    yaml_dict["test_scene_num"] = test_scene_num.data
+    yaml_dict["current_scene_num"] = current_scene_num.data
     yaml_dict["arm_name"]  = arm_name.data
     yaml_dict["object_name"] = object_name.data
     yaml_dict["pick_pose"] = message_converter.convert_ros_message_to_dictionary(pick_pose)
@@ -69,15 +69,18 @@ def send_to_yaml(yaml_filename, dict_list):
 
 
 def set_position_from_list(pose, position):
+    """Helper method to set the x, y , z field of a Pose.Position object.
+    """
     pose.position.x = position[0]
     pose.position.y = position[1]
     pose.position.z = position[2]
 
 
 def pcl_callback(pcl_msg):
+    # PART 1 : FILTERING AND RANSAC
+
     # Convert ROS msg to PCL data
     cloud = ros_to_pcl(pcl_msg)
-    separate_objects_cloud = {}
 
     print("PassThrough Filter")
     # PassThrough Filter
@@ -106,12 +109,9 @@ def pcl_callback(pcl_msg):
     vox.set_leaf_size(LEAF_SIZE, LEAF_SIZE, LEAF_SIZE)
     cloud_filtered = vox.filter()
 
-
-
     print("RANSAC Plane Segmentation")
     # RANSAC Plane Segmentation
     seg = cloud_filtered.make_segmenter()
-
     seg.set_model_type(pcl.SACMODEL_PLANE)
     seg.set_method_type(pcl.SAC_RANSAC)
     seg.set_distance_threshold(MAX_DISTANCE)
@@ -120,8 +120,9 @@ def pcl_callback(pcl_msg):
     print("Extract inliers and outliers")
     # Extract inliers and outliers
     extracted_inliers = cloud_filtered.extract(inliers, negative=False)
-    separate_objects_cloud["table"] = extracted_inliers
     extracted_outliers = cloud_filtered.extract(inliers, negative=True)
+
+    # PART 2 : CLUSTERING FOR SEGMENTATION
 
     print("Euclidean Clustering")
     # Euclidean Clustering
@@ -168,24 +169,28 @@ def pcl_callback(pcl_msg):
     pcl_table_pub.publish(ros_cloud_table)
     pcl_cluster_pub.publish(ros_cluster_cloud)
 
+    # PART 3 CLASSIFICATION
+
     print("Classify the clusters!")
     # Classify the clusters!
+    separate_objects_cloud = {"table": extracted_inliers} # Stores the point cloud before sending them to the Pr2Mover.
     detected_objects_labels = []
     detected_objects = []
-    detected_objects_dict = {} #  We use this for faster lookup.
     for index, pts_list in enumerate(cluster_indices):
         # Grab the points for the cluster from the extracted outliers (cloud_objects)
         pcl_cluster = extracted_outliers.extract(pts_list)
-        # TODO: convert the cluster from pcl to ROS using helper function
+        # Tconvert the cluster from pcl to ROS using helper function
         ros_cluster = pcl_to_ros(pcl_cluster)
         # Extract histogram features
-        # TODO: complete this step just as is covered in capture_features.py
+        # complete this step just as is covered in capture_features.py
         feature = extract_features(ros_cluster, get_normals)
 
         # Make the prediction, retrieve the label for the result
         # and add it to detected_objects_labels list
-
-        prediction = clf.predict(feature.reshape(1, -1))
+        X = feature.reshape(1, -1)
+        if scaler:
+            X = scaler.transform(X)
+        prediction = clf.predict(X)
         label = encoder.inverse_transform(prediction)[0]
         separate_objects_cloud[label] = pcl_cluster
         detected_objects_labels.append(label)
@@ -200,7 +205,6 @@ def pcl_callback(pcl_msg):
         do.label = label
         do.cloud = ros_cluster
         detected_objects.append(do)
-        detected_objects_dict[label] = do
 
     rospy.loginfo('Detected {} objects: {}'.format(len(detected_objects_labels), detected_objects_labels))
 
@@ -211,111 +215,173 @@ def pcl_callback(pcl_msg):
     # Suggested location for where to invoke your pr2_mover() function within pcl_callback()
     # Could add some logic to determine whether or not your object detections are robust
     # before calling pr2_mover()
-    try:
-        pr2_mover(separate_objects_cloud)
-    except rospy.ROSInterruptException:
-        pass
+    if len(separate_objects_cloud) > 1:
+        if pickup:  # perform pick and place.
+            try:
+                pr2_mover.move_next(separate_objects_cloud)
+            except rospy.ROSInterruptException:
+                pass
+        else:  # just output to result file.
+            send_all_to_yaml(separate_objects_cloud)
 
 
 def get_cloud_centroid(cloud):
+    """Identify the centroid of a point cloud as the mean over each dimension.
+    """
     arr_cloud = cloud.to_array()
     return np.mean(arr_cloud, axis=0)[:3]
 
 
-def aggregate_clouds(object_dict):
+def aggregate_clouds(clouds):
+    """ Forms a single point cloud object from an iteratible of clouds.
+    """
     cloud = pcl.PointCloud_PointXYZRGB()
-    objects = tuple(c.to_array() for c in object_dict.values())
+    objects = tuple(c.to_array() for c in clouds)
     arr = np.concatenate(objects)
     cloud.from_array(arr)
     return cloud
 
 
-# function to load parameters and request PickPlace service
-def pr2_mover(object_dict):
+def get_output(table_object, object_dict, dropbox_map):
+    """
+    Collects all the information required to send a pick and place request for a single object.
 
-    # TODO: Initialize variables
+    This function will fill obtain the object label, arm to use, and poses for the object and target box. 
+    """
+    object_name = String()
+    object_name.data = table_object["name"]
+    print("object_name")
+    print(object_name)
+    arm_name = String()
+    arm_name.data = dropbox_map[table_object['group']]['name']
+    print("which arm")
+    print(arm_name)
+    # Get the PointCloud for a given object and obtain it's centroid
+    pcl_cloud = object_dict[table_object["name"]]
+    centroid = get_cloud_centroid(pcl_cloud)
+    pick_pose = Pose()
+    set_position_from_list(pick_pose, centroid.tolist())
+    print("pick_pose")
+    print(pick_pose)
+    # Create 'place_pose' for the object
+    place_pose = Pose()
+    # Assign the arm to be used for pick_place
+    set_position_from_list(place_pose, dropbox_map[table_object['group']]['position'])
+    print("place_pose")
+    print(place_pose)
+    return object_name, arm_name, pick_pose, place_pose
 
-    # TODO: Get/Read parameters
+
+def send_all_to_yaml(object_dict):
+    """Push all the objects recognized in the scene to a yaml file.
+    """
     object_list_param = rospy.get_param('/object_list')
     dropbox_param = rospy.get_param("/dropbox")
-
-    # Parse parameters into individual variables
     dropbox_map = {dropbox['group']: dropbox for dropbox in dropbox_param}
-
-    # Rotate PR2 in place to capture side tables for the collision map
-    base_joint_controller_pub.publish(Float64(-np.pi/2))
-
-    base_joint_controller_pub.publish(Float64(np.pi))
-
     output_list = []
-    centroids = []
-    rospy.wait_for_service('/clear_octomap')
-    # Loop through the pick list
+    print(object_list_param)
     for i, table_object in enumerate(object_list_param):
-        try:
-            clear_octomap = rospy.ServiceProxy('/clear_octomap', Empty)
-            clear_octomap()
-        except rospy.ServiceException as e:
-            print("Service call failed: %s" % e)
-
-        object_name = String()
-        object_name.data = table_object["name"]
-        print("object_name")
-        print(object_name)
-        which_arm = String()
-        which_arm.data = dropbox_map[table_object['group']]['name']
-        print("which arm")
-        print(which_arm)
-        # Get the PointCloud for a given object and obtain it's centroid
-        pcl_cloud = object_dict.pop(table_object["name"])
-        centroids.append(get_cloud_centroid(pcl_cloud))
-        pick_pose = Pose()
-        set_position_from_list(pick_pose, centroids[i].tolist())
-        print("pick_pose")
-        print(pick_pose)
-        # Create 'place_pose' for the object
-        place_pose = Pose()
-        # Assign the arm to be used for pick_place
-        set_position_from_list(place_pose, dropbox_map[table_object['group']]['position'])
-        print("place_pose")
-        print(place_pose)
+        object_name, arm_name, pick_pose, place_pose = get_output(table_object, object_dict, dropbox_map)
 
         # Create a list of dictionaries (made with make_yaml_dict()) for later output to yaml format
-        output = make_yaml_dict(test_scene_num, which_arm, object_name, pick_pose, place_pose)
+        output = make_yaml_dict(current_scene_num, arm_name, object_name, pick_pose, place_pose)
         output_list.append(output)
-        collision_cloud = aggregate_clouds(object_dict)
-        collision_avoidance_pub.publish(pcl_to_ros(collision_cloud))
-        # Wait for 'pick_place_routine' service to come up
-        rospy.wait_for_service('pick_place_routine')
-        try:
-            pick_place_routine = rospy.ServiceProxy('pick_place_routine', PickPlace)
-
-            # Insert your message variables to be sent as a service request
-            resp = pick_place_routine(test_scene_num, object_name, which_arm, pick_pose, place_pose)
-
-            print("Response: ", resp.success)
-            pass
-        except rospy.ServiceException as e:
-            print("Service call failed: %s" % e)
 
     # Output your request parameters into output yaml file
-    send_to_yaml("output/output_{}.yaml".format(test_scene), output_list)
+    send_to_yaml("output/output_{}.yaml".format(current_scene), output_list)
+
+
+def clear_octomap():
+    """Clears the content of the collision map.
+    """
+    rospy.wait_for_service('/clear_octomap')
+    try:
+        clear_octomap_srv = rospy.ServiceProxy('/clear_octomap', Empty)
+        clear_octomap_srv()
+    except rospy.ServiceException as e:
+        print("Service call failed: %s" % e)
+
+
+def scan():
+    """Rotates PR2 in place to capture side tables for the collision map"""
+    base_joint_controller_pub.publish(Float64(-np.pi / 2))
+    rospy.wait_for_message("/pr2/joint_states")
+    base_joint_controller_pub.publish(Float64(np.pi / 2))
+    base_joint_controller_pub.publish(Float64(0))
+
+
+def pickup(object_name, arm_name, pick_pose, place_pose):
+    """Send a pickup request to the pick_place_routine service.
+    """
+    print("sending pickup")
+    rospy.wait_for_service('pick_place_routine')
+    try:
+        pick_place_routine = rospy.ServiceProxy('pick_place_routine', PickPlace)
+
+        # Insert your message variables to be sent as a service request
+        resp = pick_place_routine(current_scene_num, object_name, arm_name, pick_pose, place_pose)
+
+        print("Response: ", resp.success)
+        pass
+    except rospy.ServiceException as e:
+        print("Service call failed: %s" % e)
+
+
+class Pr2Mover:
+    """
+    Facilitates sending the pick & place request to the robot by keeping 
+    track of which items are left to pickup.
+    """
+    def __init__(self):
+        """Load the object list and drop boxes position from param server."""
+        self.object_list_param = rospy.get_param('/object_list')
+        self.object_list_queue = list(self.object_list_param)
+        dropbox_param = rospy.get_param("/dropbox")
+        self.dropbox_map = {dropbox['group']: dropbox for dropbox in dropbox_param}
+
+    def move_next(self, object_dict):
+        """Update the collision map and send a request to pick up the next object in the queue for this world.
+        """
+        if len(self.object_list_queue) > 0:
+            table_object = self.object_list_queue.pop(0)
+
+            print("moving {} next".format(table_object['name']))
+            clear_octomap()
+
+            # update octomap
+            collision_dict = object_dict.copy()
+            collision_dict.pop(table_object['name'])
+            collision_cloud = aggregate_clouds(object_dict.values())
+            collision_avoidance_pub.publish(pcl_to_ros(collision_cloud))
+            scan()
+            # retrieve object info
+            object_name, arm_name, pick_pose, place_pose = get_output(table_object,
+                                                                      object_dict,
+                                                                      self.dropbox_map)
+            # send pickup request.
+            # pickup(object_name, arm_name, pick_pose, place_pose)
+        else:
+            print("no remaining object to pickup")
 
 
 if __name__ == '__main__':
-    try:
-        test_scene = sys.argv[1]
-        test_scene_num = Int32(int(test_scene))
-    except (IndexError, ValueError) as err:
-        print("world scene number needs to be provided.")
-        print("aborting.")
-        exit(-1)
+    argument_parser = argparse.ArgumentParser()
+    argument_parser.add_argument("scene", type=int, help="index of the world scene currently in use in Gazebo")
+    argument_parser.add_argument("model", type=str, help="name of the model to use.")
+    argument_parser.add_argument("--pickup", dest="pickup", default=False, action="store_true",
+                                 help="flag indicating if the robot should pickup or just write output to yaml")
+
+    arguments = argument_parser.parse_args()
+    current_scene = arguments.scene
+    current_scene_num = Int32(current_scene)
+    pickup = arguments.pickup
+    model_name = arguments.model
 
     # ROS node initialization
     rospy.init_node('clustering', anonymous=True)
 
     # Create Subscribers
-    pcl_sub = rospy.Subscriber("/pr2/world/points", pc2.PointCloud2, pcl_callback, queue_size=1)
+    pcl_sub = rospy.Subscriber("/pr2/world/points", PointCloud2, pcl_callback, queue_size=1)
 
     # Create Publishers
     pcl_table_pub = rospy.Publisher("/pcl_table", PointCloud2, queue_size=1)
@@ -326,12 +392,13 @@ if __name__ == '__main__':
     collision_avoidance_pub = rospy.Publisher("/pr2/3d_map/points", PointCloud2, queue_size=1)
     base_joint_controller_pub = rospy.Publisher("/pr2/world_joint_controller/command", Float64, queue_size=1)
 
+    pr2_mover = Pr2Mover()
     # Load Model From disk
-    model = pickle.load(open('model/model.sav', 'rb'))
+    model = pickle.load(open('estimators/model_{}.sav'.format(model_name), 'rb'))
     clf = model['classifier']
     encoder = LabelEncoder()
     encoder.classes_ = model['classes']
-    scaler = model['scaler']
+    scaler = model["scaler"]
     # Initialize color_list
     get_color_list.color_list = []
 
