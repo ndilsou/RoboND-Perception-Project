@@ -39,6 +39,7 @@ rosrun pr2_robot perception_pipeline <world_index> <estimator>  [--pickup]
 with `<world_index>` and integer in 1-4 representing which world is currently in use, `<estimator>` the predicition model, and `--pickup` an optional indicating if the node should write to yaml (default) or send the pickup requests to the robot.
 
 available models are: __kernel_logit, kernel_lda, svm_chi2, svm_sigmoid__
+____
 
 #### Pipeline Implementation:
 
@@ -75,7 +76,7 @@ def parameter_search(estimator, X, y):
 ```
 
 
-###### Logistic Regression
+##### Logistic Regression
 ```
 Best estimator: LogisticRegression(C=0.10000000000000001, class_weight=None, dual=False,
           fit_intercept=True, intercept_scaling=1, max_iter=100,
@@ -90,7 +91,7 @@ accuracy score: 0.995
 As one of the simplest off the shelve classifier available it was a good idea to start our exploration with this model. Input are standardized before being passed to the classifier. 
 Logit already performs very well given enough data. 
 
-####### Logistic Regression with RBF kernel.
+##### Logistic Regression with RBF kernel.
 ```
 Best estimator: LogisticRegression(C=0.5, class_weight=None, dual=False, fit_intercept=True,
           intercept_scaling=1, max_iter=100, multi_class='ovr', n_jobs=1,
@@ -104,7 +105,7 @@ accuracy score: 0.94
 ![](./media/confusion_matrices/kernel_logit.jpg?raw=true)
 By passing the data through a kernel we hope to allow the estimator to take advantage of nonlinearity in the dataset. The performance of the model is slightly degraded, with a rather larger increase in standard deviation. This can imply that the model is starting to overfit. Given that we are estimating the standard deviation on a sample of 5 point, this comment is to be taken with a grain of salt.
 
-####### LDA with RBF kernel.
+##### LDA with RBF kernel.
 ```
 Best estimator: LinearDiscriminantAnalysis(n_components=None, priors=None,
               shrinkage=0.22222222222222221, solver='lsqr',
@@ -119,7 +120,7 @@ As one of the simplest linear classifier, it would be good to assess the perform
 We see that LDA can provide stellar performance if the data is preprocessed correctly. In this case we are very sensitive to the kernel used in our Kernel PCA. RBF provides a very clear advantage over all the other kernel tested.
 As a sidenote, one could say that combining Kernal PCA and LDA leads to a pipeline very similar to Kernel-SVM
 
-####### SVM with Chi2 kernel.
+##### SVM with Chi2 kernel.
 ```
 Best estimator: SVC(C=0.67000000000000004, cache_size=200, class_weight='balanced', coef0=0.0,
   decision_function_shape='ovr', degree=3, gamma=1e-05,
@@ -135,7 +136,7 @@ accuracy score: 0.995
 The Chi2 kernel is supposed to give good performances on histogram data. Because the kernel needs to work with positive data, we started by removing Standardizer from the pipeline. While this step is rather fast this simplifies the workflow.
 The performance of the model is remarquable.
 
-####### SVM with Sigmoid kernel.
+##### SVM with Sigmoid kernel.
 ```
 Best estimator: SVC(C=0.45000000000000001, cache_size=200, class_weight='balanced', coef0=0,
   decision_function_shape='ovr', degree=3, gamma=0.01, kernel='sigmoid',
@@ -151,6 +152,7 @@ Very good performance overall, but it seems to be the most complex model of the 
 
 
 Overall we can see that while SVM is a very good choice, one should experiment with various models to fine the best one for the job. Notably, the engineer should always look for the simplest model as this reduces the sources of errors in production.
+____
 
 #### Pick And Place
 
